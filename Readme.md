@@ -55,3 +55,67 @@ online book：https://browser.engineering/
 # 创建TCP套接字
 s=socket.socket(socket.AF_INET,socket.SOCK_STREAM,proto=socket.IPPROTO_TCP)
 ```
+
+### Drawing to the Screen
+
+本章通过 python 自带的 GUI 库 Tkinter 实现了一个简单的浏览器界面。从基本的命令行浏览器转变为带有可滚动文本的图形用户界面
+
+- 使用`Tkinter`库创建一个窗口,使用 Canvas 绘制
+  ```python
+  def __init__(self):
+    self.window = tkinter.Tk()
+    # 在窗口内创建Canvas画布
+    self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+    self.canvas.pack()
+  ```
+- 通过水平和垂直偏移量布局文本，存入绘制列表
+
+  ```python
+  def layout(text):
+      display_list=[]
+      cursor_x,cursor_y=HSTEP,VSTEP
+      for c in text:
+          display_list.append((cursor_x,cursor_y,c))
+          cursor_x+=HSTEP
+          if cursor_x>=WIDTH-HSTEP:
+              cursor_y+=VSTEP
+              cursor_x=HSTEP
+      return display_list
+  ```
+
+- 监听键盘命令，实现滚动响应
+
+  发生滚动事件时，更新偏移量，重新绘制文本
+
+  ```python
+  def scrolldown(self,e):
+    self.scroll+=SCROLLSTEP
+    self.draw()
+  def draw(self):
+    # 刷新前清除画布
+    self.canvas.delete("all")
+    for x,y,c in self.display_list:
+        # 超出画布范围，不绘制
+        if y>self.scroll+HEIGHT:
+            continue
+        if y+VSTEP<self.scroll:
+            continue
+        # y-self.scroll表示偏移量
+        self.canvas.create_text(x, y-self.scroll, text=c)
+  ```
+
+> Go Further
+
+- Firefox 和 Chrome 使用 ICU —— International Components for Unicode，一个开源的 Unicode 库，用于处理文本和字符集。ICU 使用动态编程根据词频表猜测短语边界。
+- 存储显示列表可以使滚动速度更快，浏览器不会在每次滚动时重新布局。滚动是最常见的用户与网页的交互。因此，真正的浏览器投入了大量的时间来提高速度
+  https://hacks.mozilla.org/2017/10/the-whole-web-at-maximum-fps-how-webrender-gets-rid-of-jank/
+
+> Exercises
+
+- [ ] 布局美化：换行
+- [x] 滚动优化：添加键盘上键的绑定，实现向上滚动；添加鼠标滚轮事件，实现上下滚动：<MouseWheel>，监听 event.delta 值，<0 向下滚动，>0 向上滚动
+- [ ] 可以改变窗口大小，同时窗口内的内容重新布局
+- [ ] 添加一个 scrollbar，实现滚动条的滚动
+- [ ] 支持绘制 emoji： 基于 OpenMoji 项目
+- [ ] 添加错误处理：对应错误 URL
+- [ ] 支持其它方向的文本排版

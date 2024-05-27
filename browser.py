@@ -1,5 +1,37 @@
 import socket
 import ssl
+import tkinter
+
+def lex(body):
+    text=""
+    in_tag=False
+    for c in body:
+        if c=="<":
+            in_tag=True
+        elif c==">":
+            in_tag=False
+        else:
+            if not in_tag:
+                text+=c
+    return text
+# 布局函数，计算出文本的坐标，将文本及其对应坐标存入一个列表
+def layout(text):
+    display_list=[]
+    cursor_x,cursor_y=HSTEP,VSTEP
+    for c in text:
+        display_list.append((cursor_x,cursor_y,c))
+        cursor_x+=HSTEP
+        if cursor_x>=WIDTH-HSTEP:
+            cursor_y+=VSTEP
+            cursor_x=HSTEP
+    return display_list
+
+
+
+WIDTH, HEIGHT = 800, 600
+HSTEP,VSTEP=13,18
+SCROLLSTEP=100
+
 class URL:
     def __init__(self,url):
         # Split the URL into scheme and url
@@ -56,23 +88,50 @@ class URL:
         content=response.read()
         s.close()
         return content
-
-def show(body):
-    in_tag=False
-    for c in body:
-        if c=="<":
-            in_tag=True
-        elif c==">":
-            in_tag=False
+    
+class Browser:
+    def __init__(self):
+        self.window = tkinter.Tk()
+        # 在窗口内创建Canvas画布
+        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+        self.canvas.pack()
+        self.scroll=0
+        self.window.bind("<Down>",self.scrolldown)
+        self.window.bind("<MouseWheel>",self.mousescroll)
+        self.window.bind("<Up>",self.scrollup)
+    def scrolldown(self,e):
+        self.scroll+=SCROLLSTEP
+        self.draw()
+    def scrollup(self,e):
+        if self.scroll-SCROLLSTEP>=0:
+            self.scroll-=SCROLLSTEP
+            self.draw()
+    def mousescroll(self,e):
+        print(e.delta)
+        if e.delta<0:
+            self.scroll+=SCROLLSTEP
         else:
-            if not in_tag:
-                print(c,end="")
-
-def load(url):
-    body=url.request()
-    show(body)
-
+            if self.scroll-SCROLLSTEP>=0:
+                self.scroll-=SCROLLSTEP
+        self.draw()
+    def load(self,url):
+        body=url.request()
+        text=lex(body)
+        self.display_list=layout(text)
+        self.draw()
+    #绘制，需要访问canvas
+    def draw(self):
+        # 刷新前清除画布
+        self.canvas.delete("all")
+        for x,y,c in self.display_list:
+            # 超出画布范围，不绘制
+            if y>self.scroll+HEIGHT:
+                continue
+            if y+VSTEP<self.scroll:
+                continue
+            # y-self.scroll表示偏移量
+            self.canvas.create_text(x, y-self.scroll, text=c)
 if __name__=="__main__":
     import sys
-    url=URL(sys.argv[1])
-    load(url)
+    Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()
