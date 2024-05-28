@@ -1,37 +1,112 @@
 import socket
 import ssl
 import tkinter
+from tkinter import font as tkfont
+class Text:
+    def __init__(self,text):
+        self.text=text
+
+class Tag:
+    def __init__(self,tag):
+        self.tag=tag
 
 def lex(body):
-    text=""
+    out=[]
+    buffer=""
     in_tag=False
     for c in body:
         if c=="<":
             in_tag=True
+            if buffer:out.append(Text(buffer))
+            buffer=""
         elif c==">":
             in_tag=False
+            out.append(Tag(buffer))
+            buffer=""
         else:
-            if not in_tag:
-                text+=c
-    return text
-# 布局函数，计算出文本的坐标，将文本及其对应坐标存入一个列表
-def layout(text):
-    display_list=[]
-    cursor_x,cursor_y=HSTEP,VSTEP
-    for c in text:
-        display_list.append((cursor_x,cursor_y,c))
-        cursor_x+=HSTEP
-        if cursor_x>=WIDTH-HSTEP:
-            cursor_y+=VSTEP
-            cursor_x=HSTEP
-    return display_list
+            buffer+=c
+    if not in_tag and buffer:
+        out.append(Text(buffer))
+    return out
 
+FONTS={}
+
+def get_font(size,weight,style):
+    key=(size,weight,style)
+    if key not in FONTS:
+        font=tkfont.Font(size=size,weight=weight,slant=style)
+        label=tkinter.Label(font=font)
+        FONTS[key]=(font,label)
+    return FONTS[key][0]
+
+class Layout:
+    def __init__(self,tokens):
+        self.display_list=[]
+        #存储当前行的所有文本
+        self.line=[]
+        self.cursor_x,self.cursor_y=HSTEP,VSTEP
+        self.weight="normal"
+        self.style="roman"
+        self.size=12
+        for tok in tokens:
+            self.token(tok)
+        #最后可能不足一整行，把最后一行加入绘制列表
+        self.flush()
+    def token(self,tok):
+        if isinstance(tok, Text):
+            for word in tok.text.split():
+                # 把文本加入绘制列表
+                self.word(word)
+        elif tok.tag == "i":
+            self.style = "italic"
+        elif tok.tag == "/i":
+            self.style = "roman"
+        elif tok.tag == "b":
+            self.weight = "bold"
+        elif tok.tag == "/b":
+            self.weight = "normal"
+        elif tok.tag == "small":
+            self.size -= 2
+        elif tok.tag == "/small":
+            self.size += 2
+        elif tok.tag == "big":
+            self.size += 4
+        elif tok.tag == "/big":
+            self.size -= 4
+        elif tok.tag == "br":
+            self.flush()
+        elif tok.tag == "/p":
+            self.flush()
+            self.cursor_y += VSTEP
+    
+    def word(self,word):
+        font=get_font(self.size,self.weight,self.style)
+        w=font.measure(word)
+        # 一整行则计算该行的y坐标
+        if self.cursor_x+w>=WIDTH-HSTEP:
+            self.flush()
+        # 行内的token计算x坐标并记录
+        self.line.append((self.cursor_x,word,font))
+        self.cursor_x+=w+font.measure(" ")
+
+    def flush(self):
+        if not self.line:
+            return
+        metrics=[font.metrics() for x,word,font in self.line]
+        max_ascent=max([m["ascent"] for m in metrics])
+        baseline=self.cursor_y+max_ascent
+        for x,word,font in self.line:
+            y=baseline-font.metrics("ascent")
+            self.display_list.append((x,y,word,font))
+        max_descent=max([m["descent"] for m in metrics])
+        self.cursor_y=baseline+1.25*max_descent
+        self.cursor_x=HSTEP
+        self.line=[]
 
 
 WIDTH, HEIGHT = 800, 600
 HSTEP,VSTEP=13,18
 SCROLLSTEP=100
-
 class URL:
     def __init__(self,url):
         # Split the URL into scheme and url
@@ -107,7 +182,7 @@ class Browser:
             self.scroll-=SCROLLSTEP
             self.draw()
     def mousescroll(self,e):
-        print(e.delta)
+        # print(e.delta)
         if e.delta<0:
             self.scroll+=SCROLLSTEP
         else:
@@ -116,21 +191,21 @@ class Browser:
         self.draw()
     def load(self,url):
         body=url.request()
-        text=lex(body)
-        self.display_list=layout(text)
+        tokens=lex(body)
+        self.display_list=Layout(tokens).display_list
         self.draw()
     #绘制，需要访问canvas
     def draw(self):
         # 刷新前清除画布
         self.canvas.delete("all")
-        for x,y,c in self.display_list:
+        for x,y,c,f in self.display_list:
             # 超出画布范围，不绘制
             if y>self.scroll+HEIGHT:
                 continue
             if y+VSTEP<self.scroll:
                 continue
             # y-self.scroll表示偏移量
-            self.canvas.create_text(x, y-self.scroll, text=c)
+            self.canvas.create_text(x, y-self.scroll, text=c,font=f,anchor="nw")
 if __name__=="__main__":
     import sys
     Browser().load(URL(sys.argv[1]))
