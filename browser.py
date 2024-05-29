@@ -2,32 +2,157 @@ import socket
 import ssl
 import tkinter
 from tkinter import font as tkfont
+
+def print_tree(node,indent=0):
+    # print(node)
+    print(" " * indent + str(node))
+    for child in node.children:
+        print_tree(child,indent+2)
+
+
 class Text:
-    def __init__(self,text):
+    def __init__(self,text,parent):
         self.text=text
+        self.children=[]
+        self.parent=parent
+    def __repr__(self):
+        return repr(self.text)
 
-class Tag:
-    def __init__(self,tag):
+class Element:
+    def __init__(self,tag,attributes,parent):
         self.tag=tag
+        self.children=[]
+        self.parent=parent
+        self.attributes=attributes
+    def __repr__(self):
+        # print("here")
+        return "<"+self.tag+">"
 
-def lex(body):
-    out=[]
-    buffer=""
-    in_tag=False
-    for c in body:
-        if c=="<":
-            in_tag=True
-            if buffer:out.append(Text(buffer))
-            buffer=""
-        elif c==">":
-            in_tag=False
-            out.append(Tag(buffer))
-            buffer=""
+#定义HTML解析器
+class HTMLParser:
+    def __init__(self,body):
+        self.body=body
+        # 用栈来存储不完整的节点
+        self.unfinished=[]
+    
+    def parse(self):
+        text=""
+        in_tag=False
+        for c in self.body:
+            if c=="<":
+                in_tag=True
+                # 进入tag内部，此时如果有text就是文本节点解析完成
+                if text:
+                    self.add_text(text)
+                #开始解析tag内部
+                text=""
+            elif c==">":
+                in_tag=False
+                self.add_tag(text)
+                text=""
+            else:
+                text+=c
+        if not in_tag and text:
+            self.add_text(text)
+        return self.finish()
+    def get_attributes(self,text):
+        parts=text.split()
+        tag=parts[0].casefold()
+        attributes={}
+        for attrpair in parts[1:]:
+            if "=" in attrpair:
+                key,value=attrpair.split("=",1)
+                attributes[key]=value
+                if len(value)>2 and value[0] in ["'",'\"']:
+                    value=value[1:-1]
+            else:
+                attributes[attrpair.casefold()]=""
+        return tag,attributes
+    def add_text(self,text):
+        # 跳过空文本
+        if text.isspace(): return
+        self.implicit_tags(None)
+        # 文本Token：将该节点加入到 DOM 树中，父节点就是当前栈顶对应的DOM节点。文本 Token 不需要压入到栈中
+        parent=self.unfinished[-1]
+        node=Text(text,parent)
+        parent.children.append(node)
+    SELF_CLOSED_TAGS=[
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    ]
+    def add_tag(self,tag):
+        # 忽略！开头的标签
+        if tag.startswith("!"): return
+        tag,attributes=self.get_attributes(tag)
+        self.implicit_tags(tag)
+        if tag.startswith("/"):
+            # endTag 从栈中弹出一个节点，表示该节点解析完成。父节点为当前栈顶节点，将其加入到DOM树中
+            # 边界情况：最后一个标签的时候，栈只剩下一个节点
+            if len(self.unfinished)==1: return 
+            node=self.unfinished.pop()
+            parent=self.unfinished[-1]
+            parent.children.append(node)
+        elif tag in self.SELF_CLOSED_TAGS:
+            parent=self.unfinished[-1]
+            node=Element(tag,attributes,parent)
+            parent.children.append(node)
         else:
-            buffer+=c
-    if not in_tag and buffer:
-        out.append(Text(buffer))
-    return out
+            # startTag 父元素就是当前栈顶对应的DOM节点。将这个token入栈
+            # 边界情况：第一个标签的时候，栈为空
+            parent=self.unfinished[-1] if self.unfinished else None
+            node=Element(tag,attributes,parent)
+            self.unfinished.append(node)
+    
+    HEAD_TAGS = [
+        "base", "basefont", "bgsound", "noscript",
+        "link", "meta", "title", "style", "script",
+    ]
+
+    def implicit_tags(self,tag):
+        while True:
+            # 每次循环只添加一个隐式标记
+            open_tags = [node.tag for node in self.unfinished]
+            # 省略html标签
+            if open_tags == [] and tag != "html":
+                self.add_tag("html")
+            # 
+            elif open_tags == ["html"] \
+                 and tag not in ["head", "body", "/html"]:
+                if tag in self.HEAD_TAGS:
+                    self.add_tag("head")
+                else:
+                    self.add_tag("body")
+            elif open_tags == ["html", "head"] and \
+                 tag not in ["/head"] + self.HEAD_TAGS:
+                self.add_tag("/head")
+            else:
+                break 
+    def finish(self):
+        if not self.unfinished:
+            self.implicit_tags(None)
+        while len(self.unfinished)>1:
+            node=self.unfinished.pop()
+            parent=self.unfinished[-1]
+            parent.children.append(node)
+        return self.unfinished.pop()
+# def lex(body):
+#     out=[]
+#     buffer=""
+#     in_tag=False
+#     for c in body:
+#         if c=="<":
+#             in_tag=True
+#             if buffer:out.append(Text(buffer))
+#             buffer=""
+#         elif c==">":
+#             in_tag=False
+#             out.append(Tag(buffer))
+#             buffer=""
+#         else:
+#             buffer+=c
+#     if not in_tag and buffer:
+#         out.append(Text(buffer))
+#     return out
 
 FONTS={}
 
@@ -40,7 +165,7 @@ def get_font(size,weight,style):
     return FONTS[key][0]
 
 class Layout:
-    def __init__(self,tokens):
+    def __init__(self,tree):
         self.display_list=[]
         #存储当前行的所有文本
         self.line=[]
@@ -48,36 +173,78 @@ class Layout:
         self.weight="normal"
         self.style="roman"
         self.size=12
-        for tok in tokens:
-            self.token(tok)
+        # for tok in tokens:
+        #     self.token(tok)
         #最后可能不足一整行，把最后一行加入绘制列表
+        while tree:
+            if tree.tag=='body':
+                self.recurse(tree)
+                break
+            else:
+                for child in tree.children:
+                    tree=child
+
         self.flush()
-    def token(self,tok):
-        if isinstance(tok, Text):
-            for word in tok.text.split():
-                # 把文本加入绘制列表
+    def recurse(self,tree):
+        if isinstance(tree,Text):
+            for word in tree.text.split():
+                # 为每一个单词计算坐标，加入绘制列表
                 self.word(word)
-        elif tok.tag == "i":
+        else:
+            self.open_tag(tree.tag)
+            # 深度优先遍历
+            for child in tree.children:
+                self.recurse(child)
+            self.close_tag(tree.tag)
+    def open_tag(self,tag):
+        if tag == "i":
             self.style = "italic"
-        elif tok.tag == "/i":
-            self.style = "roman"
-        elif tok.tag == "b":
+        elif tag == "b":
             self.weight = "bold"
-        elif tok.tag == "/b":
-            self.weight = "normal"
-        elif tok.tag == "small":
+        elif tag == "small":
             self.size -= 2
-        elif tok.tag == "/small":
-            self.size += 2
-        elif tok.tag == "big":
+        elif tag == "big":
             self.size += 4
-        elif tok.tag == "/big":
-            self.size -= 4
-        elif tok.tag == "br":
+        elif tag in ["br","p"]:
             self.flush()
-        elif tok.tag == "/p":
+    def close_tag(self, tag):
+        if tag == "i":
+            self.style = "roman"
+        elif tag == "b":
+            self.weight = "normal"
+        elif tag == "small":
+            self.size += 2
+        elif tag == "big":
+            self.size -= 4
+        elif tag in ["p","li"]:
             self.flush()
             self.cursor_y += VSTEP
+    # def token(self,tok):
+    #     if isinstance(tok, Text):
+    #         for word in tok.text.split():
+    #             # 把文本加入绘制列表
+    #             self.word(word)
+    #     elif tok.tag == "i":
+    #         self.style = "italic"
+    #     elif tok.tag == "b":
+    #         self.style = "roman"
+    #     elif tok.tag == "b":
+    #         self.weight = "bold"
+    #     elif tok.tag == "/b":
+    #         self.weight = "normal"
+    #     elif tok.tag == "small":
+    #         self.size -= 2
+    #     elif tok.tag == "/small":
+    #         self.size += 2
+    #     elif tok.tag == "big":
+    #         self.size += 4
+    #     elif tok.tag == "/big":
+    #         self.size -= 4
+    #     elif tok.tag == "br":
+    #         self.flush()
+    #     elif tok.tag == "/p":
+    #         self.flush()
+    #         self.cursor_y += VSTEP
     
     def word(self,word):
         font=get_font(self.size,self.weight,self.style)
@@ -191,8 +358,10 @@ class Browser:
         self.draw()
     def load(self,url):
         body=url.request()
-        tokens=lex(body)
-        self.display_list=Layout(tokens).display_list
+        # 返回一个树的顶点
+        self.nodes=HTMLParser(body).parse()
+        # print_tree(self.nodes)
+        self.display_list=Layout(self.nodes).display_list
         self.draw()
     #绘制，需要访问canvas
     def draw(self):
@@ -208,5 +377,8 @@ class Browser:
             self.canvas.create_text(x, y-self.scroll, text=c,font=f,anchor="nw")
 if __name__=="__main__":
     import sys
+    # body=URL(sys.argv[1]).request()
+    # nodes=HTMLParser(body).parse()
     Browser().load(URL(sys.argv[1]))
     tkinter.mainloop()
+    # print_tree(nodes)

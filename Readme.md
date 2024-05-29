@@ -14,6 +14,14 @@ online book：https://browser.engineering/
 
 - 将 URL 解析为方案、主机、端口和路径;
 - 使用`sockets`和  `ssl`  库连接到该主机;
+
+  使用 SSLContext 实例的 SSLContext.wrap_socket() 来将套接字包装为 SSLSocket 对象
+
+  ```
+  ctx=ssl.create_default_context()
+  s=ctx.wrap_socket(s,server_hostname=self.host)
+  ```
+
 - 向该主机发送 HTTP 请求，包括  `Host`  标头;
 - 将 HTTP 响应拆分为状态行、标头和正文;
 - 打印正文中的文本（而不是标签）。
@@ -320,3 +328,156 @@ def get_font(size,weight,style):
 通过 Layout 类，将标签代表的文本样式作为属性存储。
 
 通过两阶段布局，实现不同大小文本的对齐。
+
+## Part 2: Viewing Documents
+
+### Constructing a Document Tree
+
+之前的章节中将 HTML 解析为标签和文本的流，现在需要将这些标签和文本组织成树形结构，以便于后续的处理。
+
+1. 修改 Text 类和 Tag 类，添加 parent、children 属性
+
+```python
+class Text:
+    def __init__(self,text):
+        self.text=text
+        self.children=[]
+        self.parent=parent
+
+class Element:
+    def __init__(self,tag):
+        self.tag=tag
+        self.children=[]
+        self.parent=parent
+```
+
+2. 解析 HTML 为树形结构
+
+注意解析第一个和最后一个标签的边界情况
+
+```python
+class HTMLParser:
+    def __init__(self,body):
+        self.body=body
+        # 用栈来存储不完整的节点
+        self.unfinished=[]
+
+    def parse(self):
+        text=""
+        in_tag=False
+        for c in self.body:
+            if c=="<":
+                in_tag=True
+                # 进入tag内部，此时如果有text就是文本节点解析完成
+                if text:
+                    self.add_text(text)
+                #开始解析tag内部
+                text=""
+            elif c==">":
+                in_tag=False
+                self.add_tag(text)
+                text=""
+            else:
+                text+=c
+        if not in_tag and text:
+            self.add_text(text)
+        return self.finish()
+    def add_text(self,text):
+        # 文本Token：将该节点加入到 DOM 树中，父节点就是当前栈顶对应的DOM节点。文本 Token 不需要压入到栈中
+        parent=self.unfinished[-1]
+        node=Text(text.parent)
+        parent.children.append(node)
+    def add_tag(self,tag):
+        if text.startswith("/"):
+            # endTag 从栈中弹出一个节点，表示该节点解析完成。父节点为当前栈顶节点，将其加入到DOM树中
+            # 边界情况：最后一个标签的时候，栈只剩下一个节点
+            if len(self.unfinished)==1: return
+            node=self.unfinished.pop()
+            parent=self.unfinished[-1]
+            parent.children.append(node)
+        else:
+            # startTag 父元素就是当前栈顶对应的DOM节点。将这个token入栈
+            # 边界情况：第一个标签的时候，栈为空
+            parent=self.unfinished[-1] if self.unfinished else None
+            node=Element(tag,parent)
+            self.unfinished.append(node)
+```
+
+> Go Further
+> 在传统的浏览器中，HTML 解析器运行于主线程之中，并且在遇到 </script> 标签后会被阻塞，直到脚本从网络中被获取和执行。为了防止解析 HTML 被 js 脚本阻塞的问题，浏览器采用了预解析技术。
+
+3. 优化 HTML 解析器
+
+- 忽略！开头的标签和空文本
+- 添加对自闭合标签的支持
+- 将标签的 tag 名和属性分开
+  ```python
+      def get_attributes(self,text):
+      parts=text.split()
+      tag=parts[0].casefold()
+      attributes={}
+      for attrpair in parts[1:]:
+          if "=" in attrpair:
+              key,value=attrpair.split("=",1)
+              attributes[key]=value
+              if len(value)>2 and value[0] in ["'",'\"']:
+                  value=value[1:-1]
+          else:
+              attributes[attrpair.casefold()]=""
+      return tag,attributes
+  ```
+
+4. 修改布局类处理 DOM 树节点
+
+   使用递归遍历 DOM 树，计算文本节点的布局
+
+   ```python
+       def recurse(self,tree):
+           if isinstance(tree,Text):
+               for word in tree.text.split():
+                   # 为每一个单词计算坐标，加入绘制列表
+                   self.word(word)
+           else:
+               self.open_tag(tree.tag)
+               # 深度优先遍历
+               for child in tree.children:
+                   self.recurse(child)
+               self.close_tag(tree.tag)
+       def open_tag(self,tag):
+           if tag == "i":
+               self.style = "italic"
+           elif tag == "b":
+               self.weight = "bold"
+           elif tag == "small":
+               self.size -= 2
+           elif tag == "big":
+               self.size += 4
+           elif tag == "br":
+               self.flush()
+       def close_tag(self, tag):
+           if tag == "i":
+               self.style = "roman"
+           elif tag == "b":
+               self.weight = "normal"
+           elif tag == "small":
+               self.size += 2
+           elif tag == "big":
+               self.size -= 4
+           elif tag == "p":
+               self.flush()
+               self.cursor_y += VSTEP
+   ```
+
+5. 对于省略的隐式标签进行补全
+
+   在解析 HTML 的同时处理 HTML 格式错误
+
+#### 总结
+
+本章终于将 HTML 字符流转换成 DOM 树结构。
+
+将 HTML 标记转换为树的解析器，改进布局算法，使用递归遍历 HTML 树进行布局
+
+用于识别和处理元素属性的代码
+
+自动修复一些格式错误的 HTML 文档
